@@ -1,22 +1,22 @@
 import discord
-from copy import deepcopy
+import copy
 import video
 from youtube import getTitlesForSearchString
 from youtube import getAllVideosFromSearch
 from discord.ext import commands
 from discord.voice_client import VoiceClient
 import asyncio
-from heapq import heappop, heappush
+from heapq import heappop, heappush, heapify
 from queue import PriorityQueue
 from downloader import Downloader
 
 # client = discord.Client()
 client = commands.Bot(command_prefix="!")
 
-
 votingTag = 0
 
-q = PriorityQueue()
+heap = []
+heapify(heap)
 userVoteMap = {}
 
 
@@ -35,20 +35,21 @@ async def ytsearch(ctx, phrase):
 
 async def process_song_queue(ctx):
     def after_download(d):
-        await play_local(ctx, filename)
+        if tup != None : heappush(heap, tup)
+        ctx.bot.loop.create_task(process_song_queue(ctx))
 
     downloader = Downloader("./vidpath", after_download)
-
+    tup = None
     if len(heap) != 0:
         ## Pop off queue
-        song = heappop(heap)
-
+        tup = heappop(heap)
+        video = tup[1]
         ## Check if the song is already downloaded. If so, get the filename
         ## by title
-        if (song.id not in downloader.get_downloaded_urls()):
-            downloader.download_video(song.url)
+        if (video.id not in downloader.get_downloaded_urls()):
+            downloader.download_video(video.url)
         else:
-            filename = "{}-{}".format(song.video_name, song.id)
+            filename = "{}-{}".format(video.video_name, video.id)
             await play_local(ctx, filename)
 
 
@@ -73,10 +74,11 @@ async def resume(ctx):
 async def joinvc(ctx, *, channel_name: discord.VoiceChannel):
     try:
         if ctx.voice_client is not None:
+            ctx.bot.loop.create_task(process_song_queue(ctx))
             return await ctx.voice_client.move_to(channel_name)
 
         await channel_name.connect()
-        ctx.bot.loop.create_task(play_local(ctx, filename))
+        ctx.bot.loop.create_task(process_song_queue(ctx))
     except:
         print("Channel not found!!!")
 
@@ -85,25 +87,27 @@ async def leavevc(ctx):
     await ctx.voice_client.disconnect()
 
 @client.command()
-async def add2q(ctx, numberResult, searchPhrase):
-    global q
+async def add(ctx, numberResult, searchPhrase):
+    global heap
     global votingTag
     # Should be in format of !add2q $numberResult $searchPhrase
     # E.g. !add2q 1 who are you 
-    # args = message.content.split(" ")[1:]
-    # numberResult = args[0]
-    # searchPhrase = " ".join(args[1:])
     await ctx.send("Adding " + searchPhrase + " to the queue with voting tag #" + str(votingTag) + ".")
-    vid = getAllVideosFromSearch(searchPhrase)[0]
-    q.put((vid.num_votes(), vid, votingTag))
+    vid = getAllVideosFromSearch(searchPhrase, votingTag)[0]
+    heappush(heap, (vid.num_votes(), vid))
     votingTag += 1
 
 @client.command()
-async def showq(ctx):
+async def show(ctx):
     finalStr = ""
-    temp = list(q.queue)
-    for item in temp:
-        finalStr += item[1].video_name + ": " + str(item[0]) + " votes with voting tag #" + str(item[2]) + '\n'
+    temp = copy.deepcopy(heap)
+    tmpArr = []
+    while len(temp) != 0:
+        tmpArr.append(heappop(temp))
+
+    tmpArr.reverse()
+    for item in tmpArr:
+        finalStr += str(item[0]) + " votes: " + item[1].video_name + " " + " with voting tag #" + str(item[1].id) + '\n'
     await ctx.send(finalStr)
 
 @client.command()
@@ -112,7 +116,6 @@ async def upvote(ctx, votedTag):
 
 @client.command()
 async def downvote(ctx, votedTag):
-    print(1234)
     await abstract_vote("D", str(ctx.author), votedTag, ctx)
 
 @client.command()
@@ -121,13 +124,13 @@ async def remvote(ctx, votedTag):
 
 #Pass in U for upvote, R for remove, and D for downvote
 async def abstract_vote(typeOfVote, username, votedTag, context):
-    global q
-    temp = list(q.queue)
+    global heap
+    temp = copy.deepcopy(heap)
     matchedItem = ""
-    tempPQ = PriorityQueue()
+    tempHeap = []
 
     for item in temp:
-        currentVotingTag = item[2]
+        currentVotingTag = item[1].id
         currentVideo = item[1]
         if int(currentVotingTag) == int(votedTag):
             if typeOfVote == "U":
@@ -140,10 +143,10 @@ async def abstract_vote(typeOfVote, username, votedTag, context):
                 currentVideo.remove_vote(username)
                 await context.send(username + " removed their vote from: " + currentVideo.video_name + ", which is now at " + str(currentVideo.num_votes()) + " votes.")
 
-            tempPQ.put((currentVideo.num_votes(), currentVideo, currentVotingTag))
+            heappush(tempHeap, (currentVideo.num_votes(), currentVideo))
         else:
-            tempPQ.put(item)
-    q = tempPQ
+            heappush(tempHeap, item)
+    heap = tempHeap
 
 tokenFile = open("token.txt","r+")
 token = tokenFile.read()
