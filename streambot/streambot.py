@@ -6,48 +6,23 @@ from youtube import getAllVideosFromSearch
 from discord.ext import commands
 from discord.voice_client import VoiceClient
 import asyncio
+from heapq import heappop, heappush
+from queue import PriorityQueue
+from downloader import Downloader
 
 # client = discord.Client()
 client = commands.Bot(command_prefix="!")
 
-from queue import PriorityQueue
 
 votingTag = 0
 
 q = PriorityQueue()
 userVoteMap = {}
 
+
 @client.event
 async def on_ready():
     print('We have logged in as {0.user}'.format(client))
-
-# @client.event
-# async def on_message(message):
-#     global q
-#     global votingTag
-
-#     if message.author == client.user:
-#         return
-
-#     if message.content.startswith('$hello'):
-#         await message.channel.send('Hello!')
-#     elif message.content.startswith('!upvote'):
-#         votedTag = message.content.split(" ")[1]
-#         temp = list(q.queue)
-#         matchedItem = ""
-#         tempPQ = PriorityQueue()
-
-#         for item in temp:
-#             currentVotingTag = item[2]
-#             currentVideo = item[1]
-#             print(currentVotingTag == votedTag)
-#             if int(currentVotingTag) == int(votedTag) and not currentVideo.already_voted(str(message.author)):
-#                 currentVideo.upvote(str(message.author))
-#                 print(currentVideo.num_votes())
-#                 tempPQ.put((currentVideo.num_votes(), currentVideo, currentVotingTag))
-#             else:
-#                 tempPQ.put(item)
-#         q = tempPQ
 
 @client.command()
 async def hello(ctx):
@@ -58,10 +33,31 @@ async def hello(ctx):
 async def ytsearch(ctx, phrase):
     await ctx.send(getTitlesForSearchString(phrase))
 
-@client.command()
+async def process_song_queue(ctx):
+    def after_download(d):
+        await play_local(ctx, filename)
+
+    downloader = Downloader("./vidpath", after_download)
+
+    if len(heap) != 0:
+        ## Pop off queue
+        song = heappop(heap)
+
+        ## Check if the song is already downloaded. If so, get the filename
+        ## by title
+        if (song.id not in downloader.get_downloaded_urls()):
+            downloader.download_video(song.url)
+        else:
+            filename = "{}-{}".format(song.video_name, song.id)
+            await play_local(ctx, filename)
+
+
 async def play_local(ctx, filename):
+    async def after_song(error):
+        ctx.bot.loop.create_task(process_song_queue(ctx))
+
     source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(filename))
-    ctx.voice_client.play(source)
+    ctx.voice_client.play(source, after=after_song)
 
     await ctx.send("Now playing file {}".format(filename))
 
@@ -80,6 +76,7 @@ async def joinvc(ctx, *, channel_name: discord.VoiceChannel):
             return await ctx.voice_client.move_to(channel_name)
 
         await channel_name.connect()
+        ctx.bot.loop.create_task(play_local(ctx, filename))
     except:
         print("Channel not found!!!")
 
